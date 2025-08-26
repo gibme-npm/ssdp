@@ -1,11 +1,27 @@
 {
   "name": "@gibme/ssdp",
-  "version": "20.0.0",
-  "description": "A simple ssdp helper",
+  "version": "20.0.1",
+  "description": "A simple SSDP helper",
   "main": "./dist/index.js",
   "types": "./dist/index.ts",
   "files": [
     "dist/*"
+  ],
+  "keywords": [
+    "ssdp",
+    "upnp",
+    "multicast",
+    "discovery",
+    "service",
+    "udp",
+    "network",
+    "zero",
+    "configuration",
+    "networking",
+    "protocol",
+    "advertisement",
+    "browser",
+    "advertiser"
   ],
   "license": "MIT",
   "scripts": {
