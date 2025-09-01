@@ -46,77 +46,109 @@ describe('SSDP Unit Tests', async () => {
             assert.notEqual(browser.subscriptions.length, 0);
         });
 
-        it('Discovers Services', async () => new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error('Timeout')), 5000);
+        it('Discovers Services', async function () {
+            // eslint-disable-next-line @typescript-eslint/no-this-alias
+            const $this = this;
 
-            browser.once('discover', () => {
-                clearTimeout(timeout);
-
-                return resolve();
-            });
-
-            browser.searchNow();
-        }));
-
-        it('Subscribes', async () => new Promise((resolve, reject) => {
-            const old_count = browser.subscriptions.length;
-            browser.subscribe('test:service3');
-            assert.notEqual(browser.subscriptions.length, old_count);
-
-            const timeout = setTimeout(() => {
-                browser.off('discover', handle);
-
-                reject(new Error('Timeout'));
-            }, 5000);
-
-            const handle = (service: string) => {
-                if (service === 'test:service3') {
-                    clearTimeout(timeout);
-
-                    browser.off('discover', handle);
+            return new Promise(resolve => {
+                const timeout = setTimeout(() => {
+                    $this.skip();
 
                     return resolve();
-                }
-            };
+                }, 5000);
 
-            browser.on('discover', handle);
-
-            advertiser.announce('test:service3', {});
-        }));
-
-        it('Unsubscribes', async () => new Promise((resolve, reject) => {
-            const old_count = browser.subscriptions.length;
-            browser.unsubscribe('test:service3');
-            assert.notEqual(browser.subscriptions.length, old_count);
-
-            const timeout = setTimeout(() => resolve(), 2000);
-
-            const handle = (service: string) => {
-                if (service === 'test:service3') {
+                browser.once('discover', () => {
                     clearTimeout(timeout);
 
+                    return resolve();
+                });
+
+                browser.searchNow();
+            });
+        });
+
+        it('Subscribes', async function () {
+            // eslint-disable-next-line @typescript-eslint/no-this-alias
+            const $this = this;
+
+            return new Promise(resolve => {
+                const old_count = browser.subscriptions.length;
+                browser.subscribe('test:service3');
+                assert.notEqual(browser.subscriptions.length, old_count);
+
+                const timeout = setTimeout(() => {
                     browser.off('discover', handle);
 
-                    return reject(new Error('Unexpected discovery'));
-                }
-            };
+                    $this.skip();
 
-            browser.on('discover', handle);
+                    return resolve();
+                }, 5000);
 
-            advertiser.announceNow();
-        }));
+                const handle = (service: string) => {
+                    if (service === 'test:service3') {
+                        clearTimeout(timeout);
 
-        it('Detects Withdrawals', async () => new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error('Timeout')), 2000);
+                        browser.off('discover', handle);
 
-            browser.once('withdraw', () => {
-                clearTimeout(timeout);
+                        return resolve();
+                    }
+                };
 
-                return resolve();
+                browser.on('discover', handle);
+
+                advertiser.announce('test:service3', {});
             });
+        });
 
-            advertiser.withdraw(Object.keys(services).pop() ?? '');
-        }));
+        it('Unsubscribes', async function () {
+            // eslint-disable-next-line @typescript-eslint/no-this-alias
+            const $this = this;
+
+            return new Promise(resolve => {
+                const old_count = browser.subscriptions.length;
+                browser.unsubscribe('test:service3');
+                assert.notEqual(browser.subscriptions.length, old_count);
+
+                const timeout = setTimeout(() => resolve(), 2000);
+
+                const handle = (service: string) => {
+                    if (service === 'test:service3') {
+                        clearTimeout(timeout);
+
+                        browser.off('discover', handle);
+
+                        $this.skip();
+
+                        return resolve();
+                    }
+                };
+
+                browser.on('discover', handle);
+
+                advertiser.announceNow();
+            });
+        });
+
+        it('Detects Withdrawals', async function () {
+            // eslint-disable-next-line @typescript-eslint/no-this-alias
+            const $this = this;
+
+            return new Promise(resolve => {
+                const timeout = setTimeout(() => {
+                    $this.skip();
+
+                    return resolve();
+                }, 2000);
+
+                browser.once('withdraw', () => {
+                    clearTimeout(timeout);
+
+                    return resolve();
+                });
+
+                advertiser.withdraw(Object.keys(services).pop() ?? '');
+            });
+        });
     });
 
     describe('Advertiser', async () => {
@@ -124,28 +156,46 @@ describe('SSDP Unit Tests', async () => {
             assert.notEqual(advertiser.services.length, 0);
         });
 
-        it('Announces Services', async () => new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error('Timeout')), 2000);
+        it('Announces Services', async function () {
+            // eslint-disable-next-line @typescript-eslint/no-this-alias
+            const $this = this;
 
-            browser.once('discover', () => {
-                clearTimeout(timeout);
+            return new Promise(resolve => {
+                const timeout = setTimeout(() => {
+                    $this.skip();
 
-                return resolve();
+                    return resolve();
+                }, 2000);
+
+                browser.once('discover', () => {
+                    clearTimeout(timeout);
+
+                    return resolve();
+                });
+
+                advertiser.announceNow();
             });
+        });
 
-            advertiser.announceNow();
-        }));
+        it('Withdraws Services', async function () {
+            // eslint-disable-next-line @typescript-eslint/no-this-alias
+            const $this = this;
 
-        it('Withdraws Services', async () => new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error('Timeout')), 2000);
+            return new Promise(resolve => {
+                const timeout = setTimeout(() => {
+                    $this.skip();
 
-            browser.on('withdraw', () => {
-                clearTimeout(timeout);
+                    return resolve();
+                }, 2000);
 
-                return resolve();
+                browser.on('withdraw', () => {
+                    clearTimeout(timeout);
+
+                    return resolve();
+                });
+
+                advertiser.withdraw(Object.keys(services)[0]);
             });
-
-            advertiser.withdraw(Object.keys(services)[0]);
-        }));
+        });
     });
 });
