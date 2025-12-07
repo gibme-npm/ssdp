@@ -404,7 +404,7 @@ export namespace SSDP {
          * @param isReply
          * @protected
          */
-        // eslint-disable-next-line no-useless-constructor
+
         protected constructor (
             public readonly method: 'm-search' | 'notify' | 'reply',
             public readonly isReply = false
