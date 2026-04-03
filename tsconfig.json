@@ -1,19 +1,20 @@
 {
   "compilerOptions": {
-    "target": "es6",
+    "target": "es2024",
     "lib": [
-      "es2017",
-      "dom",
-      "scripthost"
+      "es2024"
     ],
     "module": "commonjs",
     "declaration": true,
     "outDir": "./dist",
+    "rootDir": "./src",
     "strict": true,
-    "downlevelIteration": true,
     "esModuleInterop": true,
     "sourceMap": true,
-    "noImplicitAny": false
+    "noImplicitAny": false,
+    "types": [
+      "node"
+    ]
   },
   "include": [
     "src/**/*.ts"

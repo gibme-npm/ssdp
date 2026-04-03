@@ -22,6 +22,7 @@ import { SSDP } from './ssdp';
 import { Browser } from './browser';
 import { Advertiser } from './advertiser';
 
+export type { HeadersInit } from './ssdp';
 export { SSDP, Browser, Advertiser };
 
 export default SSDP;

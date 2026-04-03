@@ -18,7 +18,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-import { SSDP } from './ssdp';
+import { SSDP, type HeadersInit } from './ssdp';
 import { EventEmitter } from 'events';
 import Timer from '@gibme/timer';
 import { v7 as uuid } from 'uuid';

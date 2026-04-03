@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2025, Brandon Lehmann <brandonlehmann@gmail.com>
+// Copyright (c) 2018-2026, Brandon Lehmann <brandonlehmann@gmail.com>
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -18,7 +18,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-import { describe, it, after, before } from 'mocha';
+import { describe, it, after, before } from 'node:test';
 import { Browser, Advertiser } from '../src';
 import assert from 'assert';
 
@@ -46,13 +46,10 @@ describe('SSDP Unit Tests', async () => {
             assert.notEqual(browser.subscriptions.length, 0);
         });
 
-        it('Discovers Services', async function () {
-            // eslint-disable-next-line @typescript-eslint/no-this-alias
-            const $this = this;
-
-            return new Promise(resolve => {
+        it('Discovers Services', { skip: false }, async (t) => {
+            return new Promise<void>(resolve => {
                 const timeout = setTimeout(() => {
-                    $this.skip();
+                    t.skip('Timed out waiting for discovery');
 
                     return resolve();
                 }, 5000);
@@ -67,11 +64,8 @@ describe('SSDP Unit Tests', async () => {
             });
         });
 
-        it('Subscribes', async function () {
-            // eslint-disable-next-line @typescript-eslint/no-this-alias
-            const $this = this;
-
-            return new Promise(resolve => {
+        it('Subscribes', { skip: false }, async (t) => {
+            return new Promise<void>(resolve => {
                 const old_count = browser.subscriptions.length;
                 browser.subscribe('test:service3');
                 assert.notEqual(browser.subscriptions.length, old_count);
@@ -79,7 +73,7 @@ describe('SSDP Unit Tests', async () => {
                 const timeout = setTimeout(() => {
                     browser.off('discover', handle);
 
-                    $this.skip();
+                    t.skip('Timed out waiting for subscription discovery');
 
                     return resolve();
                 }, 5000);
@@ -100,11 +94,8 @@ describe('SSDP Unit Tests', async () => {
             });
         });
 
-        it('Unsubscribes', async function () {
-            // eslint-disable-next-line @typescript-eslint/no-this-alias
-            const $this = this;
-
-            return new Promise(resolve => {
+        it('Unsubscribes', { skip: false }, async (t) => {
+            return new Promise<void>(resolve => {
                 const old_count = browser.subscriptions.length;
                 browser.unsubscribe('test:service3');
                 assert.notEqual(browser.subscriptions.length, old_count);
@@ -117,7 +108,7 @@ describe('SSDP Unit Tests', async () => {
 
                         browser.off('discover', handle);
 
-                        $this.skip();
+                        t.skip('Still receiving events after unsubscribe');
 
                         return resolve();
                     }
@@ -129,13 +120,10 @@ describe('SSDP Unit Tests', async () => {
             });
         });
 
-        it('Detects Withdrawals', async function () {
-            // eslint-disable-next-line @typescript-eslint/no-this-alias
-            const $this = this;
-
-            return new Promise(resolve => {
+        it('Detects Withdrawals', { skip: false }, async (t) => {
+            return new Promise<void>(resolve => {
                 const timeout = setTimeout(() => {
-                    $this.skip();
+                    t.skip('Timed out waiting for withdrawal');
 
                     return resolve();
                 }, 2000);
@@ -156,13 +144,10 @@ describe('SSDP Unit Tests', async () => {
             assert.notEqual(advertiser.services.length, 0);
         });
 
-        it('Announces Services', async function () {
-            // eslint-disable-next-line @typescript-eslint/no-this-alias
-            const $this = this;
-
-            return new Promise(resolve => {
+        it('Announces Services', { skip: false }, async (t) => {
+            return new Promise<void>(resolve => {
                 const timeout = setTimeout(() => {
-                    $this.skip();
+                    t.skip('Timed out waiting for announcement');
 
                     return resolve();
                 }, 2000);
@@ -177,13 +162,10 @@ describe('SSDP Unit Tests', async () => {
             });
         });
 
-        it('Withdraws Services', async function () {
-            // eslint-disable-next-line @typescript-eslint/no-this-alias
-            const $this = this;
-
-            return new Promise(resolve => {
+        it('Withdraws Services', { skip: false }, async (t) => {
+            return new Promise<void>(resolve => {
                 const timeout = setTimeout(() => {
-                    $this.skip();
+                    t.skip('Timed out waiting for withdrawal');
 
                     return resolve();
                 }, 2000);

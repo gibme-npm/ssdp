@@ -23,6 +23,8 @@ import type { RemoteInfo } from 'dgram';
 import type { AddressInfo } from 'net';
 import { EventEmitter } from 'events';
 
+export type HeadersInit = [string, string][] | Record<string, string> | Headers;
+
 /**
  * Wraps a multicast socket implementation into an instance of a SSDP handler
  */
