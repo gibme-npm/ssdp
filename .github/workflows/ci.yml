@@ -51,10 +51,11 @@ jobs:
     - uses: actions/setup-node@v4
       with:
         node-version: '22.22.1'  # Pin to avoid 22.22.2 npm self-upgrade bug (nodejs/node#62425)
+    - name: Update npm for OIDC support
+      run: npm install -g npm@latest
     - name: Install Yarn
       run: npm install -g yarn@1.22.22
     - name: Install Dependencies
       run: yarn install --frozen-lockfile
-    # Node 22.x ships npm 10.x which supports OIDC trusted publishing; no upgrade needed.
     - name: Publish to NPM
       run: npm publish --access public --provenance
