@@ -15,13 +15,15 @@ jobs:
         with:
           node-version: '22'
       - name: Install Yarn
-        run: npm install -g yarn
+        run: npm install -g yarn@1.22.22
       - name: Install Dependencies
-        run: yarn
+        run: yarn install --frozen-lockfile
       - name: Build Documentation
         run: yarn build:docs
       - name: Push to Branch
-        uses: s0/git-publish-subdir-action@develop
+        # Pinned to a verified commit SHA rather than @develop to prevent
+        # supply-chain attacks via upstream branch movement.
+        uses: s0/git-publish-subdir-action@92faf786f11dfa44fc366ac3eb274d193ca1af7e # v2.6.0
         env:
           REPO: self
           BRANCH: gh_pages

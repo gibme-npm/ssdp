@@ -37,6 +37,14 @@ export class SSDP extends EventEmitter {
     protected constructor (private readonly socket: MulticastSocket) {
         super();
 
+        // Re-emit drops from the underlying multicast layer so consumers have
+        // observability into packets that were filtered before reaching the
+        // dispatch path (currently only the RFC 6762 §11-style linkLocalOnly
+        // origin check).
+        this.socket.on('drop', (msg, local, remote, reason) => {
+            this.emit('drop', msg, local, remote, reason);
+        });
+
         this.socket.on('message', (msg: Buffer, local: AddressInfo, remote: RemoteInfo, fromSelf: boolean) => {
             const message = msg.toString();
 
@@ -46,7 +54,17 @@ export class SSDP extends EventEmitter {
                 this.emit('error', new Error(`[${type}] ${errorMessage}:\n${message}`));
             };
 
-            if (message.startsWith('M-SEARCH')) {
+            // Validate the start-line strictly before dispatch:
+            //   M-SEARCH * HTTP/1.1   draft-cai-ssdp v1 §4.2: request-URI MUST be '*'.
+            //                         Implementations MUST be ready to ignore otherwise.
+            //   NOTIFY   * HTTP/1.1   per UPnP DA.
+            //   HTTP/1.1 200 OK       per RFC 9112 §4 status-line, with required SP separators.
+            // Any datagram whose start-line does not match one of these shapes is silently
+            // dropped to prevent attacker-crafted garbage from being delivered as a 'reply'.
+            const eol = message.indexOf('\n');
+            const startLine = (eol >= 0 ? message.slice(0, eol) : message).replace(/\r$/, '');
+
+            if (startLine === 'M-SEARCH * HTTP/1.1') {
                 try {
                     const payload = SSDP.Search.decode(message, remote.address, remote.port);
 
@@ -58,7 +76,7 @@ export class SSDP extends EventEmitter {
                 } catch (error: any) {
                     handle_error('M-SEARCH', error);
                 }
-            } else if (message.startsWith('NOTIFY')) {
+            } else if (startLine === 'NOTIFY * HTTP/1.1') {
                 try {
                     const payload = SSDP.Notification.decode(message);
 
@@ -66,7 +84,7 @@ export class SSDP extends EventEmitter {
                 } catch (error: any) {
                     handle_error('NOTIFY', error);
                 }
-            } else {
+            } else if (/^HTTP\/1\.1 \d{3}( .*)?$/.test(startLine)) {
                 try {
                     const payload = SSDP.Reply.decode(message);
 
@@ -75,6 +93,7 @@ export class SSDP extends EventEmitter {
                     handle_error('REPLY', error);
                 }
             }
+            // else: malformed start-line, silently drop (no event, no error).
         });
     }
 
@@ -83,15 +102,17 @@ export class SSDP extends EventEmitter {
      * @param options
      */
     public static async create (options: Partial<SSDP.Options> = {}): Promise<SSDP> {
-        options.ttl ||= 2;
-
+        // SSDP uses the administratively-scoped 239.255.255.250 group, not the mDNS
+        // 224.0.0.251 group that RFC 6762 §11 normatively governs. SSDP traditionally
+        // accepts packets from any source on the multicast scope (single-hop or routed
+        // via TTL), so default linkLocalOnly to false. Consumers who run SSDP only on
+        // a single segment can opt into the §11-style hardening.
         const socket = await MulticastSocket.create({
             ...options,
+            linkLocalOnly: options.linkLocalOnly ?? false,
             port: 1900,
             multicastGroup: '239.255.255.250'
         });
-
-        socket.setTTL(options.ttl);
 
         return new SSDP(socket);
     }
@@ -138,6 +159,19 @@ export class SSDP extends EventEmitter {
      * @param listener
      */
     public on (event: 'error', listener: (error: Error) => void): this;
+
+    /**
+     * Emitted when the underlying multicast layer drops an inbound packet
+     * before dispatch (e.g. linkLocalOnly origin check failed).
+     * @param event
+     * @param listener
+     */
+    public on (event: 'drop', listener: (
+        msg: Buffer,
+        local: AddressInfo,
+        remote: RemoteInfo,
+        reason: string
+    ) => void): this;
 
     public on (event: any, listener: (...args: any[]) => void): this {
         return super.on(event, listener);
@@ -186,6 +220,19 @@ export class SSDP extends EventEmitter {
      */
     public once (event: 'error', listener: (error: Error) => void): this;
 
+    /**
+     * Emitted when the underlying multicast layer drops an inbound packet
+     * before dispatch.
+     * @param event
+     * @param listener
+     */
+    public once (event: 'drop', listener: (
+        msg: Buffer,
+        local: AddressInfo,
+        remote: RemoteInfo,
+        reason: string
+    ) => void): this;
+
     public once (event: any, listener: (...args: any[]) => void): this {
         return super.once(event, listener);
     }
@@ -232,6 +279,19 @@ export class SSDP extends EventEmitter {
      * @param listener
      */
     public off (event: 'error', listener: (error: Error) => void): this;
+
+    /**
+     * Emitted when the underlying multicast layer drops an inbound packet
+     * before dispatch.
+     * @param event
+     * @param listener
+     */
+    public off (event: 'drop', listener: (
+        msg: Buffer,
+        local: AddressInfo,
+        remote: RemoteInfo,
+        reason: string
+    ) => void): this;
 
     public off (event: any, listener: (...args: any[]) => void): this {
         return super.off(event, listener);
@@ -390,10 +450,17 @@ export namespace SSDP {
          */
         loopback: boolean;
         /**
-         * The TTL of the underlying multicast socket
-         * @default 2
+         * When true, the underlying multicast socket drops inbound packets whose
+         * source is not on a local-link subnet (RFC 6762 §11-style hardening).
+         *
+         * SSDP is not mDNS: RFC 6762 §11 normatively governs only the mDNS
+         * group (224.0.0.251). SSDP runs on the administratively-scoped group
+         * 239.255.255.250 and is expected to interoperate across hops bounded
+         * by TTL. The default is therefore false. Single-segment deployments
+         * that want the extra hardening can pass true.
+         * @default false
          */
-        ttl: number;
+        linkLocalOnly: boolean;
     }
 
     /**
@@ -463,19 +530,29 @@ export namespace SSDP {
                 payload = payload.toString();
             }
 
-            const lines = payload.split('\n').slice(1)
-                .map(line => line.trim())
+            // RFC 9112 §2 framing: CRLF terminator; tolerate bare LF defensively but
+            // never invent CRs. Drop the start-line (slice(1)) and any empty lines.
+            const lines = payload.split(/\r?\n/).slice(1)
                 .filter(line => line.length > 0);
 
             const headers = new Headers();
 
-            for (const line of lines) {
-                const [key, ...value] = line.split(':')
-                    .map(part => part.trim());
+            // RFC 9112 §5.1: "No whitespace is allowed between the field name and
+            // colon. A server MUST reject [...] any received request message that
+            // contains whitespace between a header field name and colon."
+            // field-name = token (RFC 9110 §5.6.2). Reject anything not matching.
+            const headerLine = /^([!#$%&'*+\-.^_`|~A-Za-z0-9]+):[ \t]?(.*?)[ \t]*$/;
 
-                if (key && value.length > 0) {
-                    headers.set(key.toUpperCase(), value.join(':').trim());
-                }
+            for (const line of lines) {
+                const m = headerLine.exec(line);
+                if (!m) continue;
+
+                const name = m[1].toUpperCase();
+                const value = m[2];
+
+                // Headers.set throws on names containing non-token octets and on
+                // values containing CR / LF / NUL. Surface any throw to the caller.
+                headers.set(name, value);
             }
 
             return headers;
@@ -525,7 +602,10 @@ export namespace SSDP {
         public getHeader (key: string): string | undefined {
             key = key.trim().toUpperCase();
 
-            return this._headers.get(key) || undefined;
+            // Headers.get returns null for absent; ?? preserves the distinction
+            // between absent and present-but-empty so the result agrees with
+            // hasHeader().
+            return this._headers.get(key) ?? undefined;
         }
 
         /**

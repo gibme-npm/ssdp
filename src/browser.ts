@@ -44,10 +44,17 @@ export class Browser extends EventEmitter {
     ) {
         super();
 
+        // Default no-op error sink: EventEmitter throws on an unhandled
+        // 'error' emission, which would crash the host process for transient
+        // network conditions the browser cannot prevent. Consumer-installed
+        // 'error' listeners still fire alongside this sink, so attaching one
+        // remains the right way to observe errors.
         this.on('error', () => {});
 
         this.socket
             .on('error', error => this.emit('error', error))
+            .on('drop', (msg, local, remote, reason) =>
+                this.emit('drop', msg, local, remote, reason))
             .on('notification', (payload, local, remote) => {
                 const target = payload.getHeader('NT');
 
@@ -128,6 +135,19 @@ export class Browser extends EventEmitter {
      * @param listener
      */
     public on (event: 'error', listener: (error: Error) => void): this;
+
+    /**
+     * Emitted when the underlying multicast layer dropped an inbound packet
+     * before dispatch (linkLocalOnly origin check failed).
+     * @param event
+     * @param listener
+     */
+    public on (event: 'drop', listener: (
+        msg: Buffer,
+        local: AddressInfo,
+        remote: RemoteInfo,
+        reason: string
+    ) => void): this;
 
     public on (event: any, listener: (...args: any[]) => void): this {
         return super.on(event, listener);

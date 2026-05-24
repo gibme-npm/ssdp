@@ -1,9 +1,9 @@
 {
   "name": "@gibme/ssdp",
-  "version": "22.0.0",
+  "version": "22.0.1",
   "description": "A simple SSDP helper",
   "main": "./dist/index.js",
-  "types": "./dist/index.ts",
+  "types": "./dist/index.d.ts",
   "files": [
     "dist/*"
   ],
@@ -71,8 +71,8 @@
     "typescript": "^6.0.2"
   },
   "dependencies": {
-    "@gibme/multicast": "^22.0.0",
+    "@gibme/multicast": "^22.0.1",
     "@gibme/timer": "^22.0.0",
-    "uuid": "^13.0.0"
+    "uuid": "^14.0.0"
   }
 }

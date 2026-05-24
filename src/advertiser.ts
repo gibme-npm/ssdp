@@ -21,7 +21,7 @@
 import { SSDP, type HeadersInit } from './ssdp';
 import { EventEmitter } from 'events';
 import Timer from '@gibme/timer';
-import { v7 as uuid } from 'uuid';
+import { v4 as uuid } from 'uuid';
 import type { AddressInfo } from 'net';
 import type { RemoteInfo } from 'dgram';
 
@@ -42,13 +42,15 @@ export class Advertiser extends EventEmitter {
      * @param uuid
      * @param socket
      * @param authenticationProvider
+     * @param silentMode
      * @protected
      */
     protected constructor (
         interval: number,
         public readonly uuid: string,
         private readonly socket: SSDP,
-        private readonly authenticationProvider: (ipAddress: string) => Promise<boolean> | boolean
+        private readonly authenticationProvider: (ipAddress: string) => Promise<boolean> | boolean,
+        private readonly silentMode: boolean = false
     ) {
         super();
 
@@ -60,10 +62,14 @@ export class Advertiser extends EventEmitter {
                 this.handle_payload(payload, local, remote));
 
         this.timer = new Timer(interval, true);
-        this.timer
-            .on('tick', () => this.notify_root_devices())
-            .on('tick', () => this.notify(this._services))
-            .tick();
+        // When silentMode is on, do not announce ourselves on the network. We
+        // remain reachable only via direct M-SEARCH (still subject to authn).
+        if (!this.silentMode) {
+            this.timer
+                .on('tick', () => this.notify_root_devices())
+                .on('tick', () => this.notify(this._services))
+                .tick();
+        }
     }
 
     /**
@@ -80,14 +86,19 @@ export class Advertiser extends EventEmitter {
     public static async create (options: Partial<Advertiser.Options> = {}): Promise<Advertiser> {
         const socket = await SSDP.create(options);
 
-        options.uuid ??= uuid();
+        // Reject empty-string uuid as a fail-open footgun (would make
+        // `target === \`uuid:${this.uuid}\`` collapse to matching `uuid:`).
+        // Default to RFC 9562 v4 random rather than v7 to avoid leaking the
+        // device-creation wall-clock timestamp via every USN broadcast.
+        if (!options.uuid) options.uuid = uuid();
         options.authenticationProvider ??= () => true;
 
         const advertiser = new Advertiser(
             options.interval || 60_000,
             options.uuid,
             socket,
-            options.authenticationProvider);
+            options.authenticationProvider,
+            options.silentMode ?? false);
 
         if (options.services) {
             for (const service of Object.keys(options.services)) {
@@ -232,7 +243,19 @@ export class Advertiser extends EventEmitter {
     };
 
     /**
-     * Handles an incoming search payload
+     * Handles an incoming search payload.
+     *
+     * Dispatch order:
+     *  1. Validate MAN and ST headers per draft-cai-ssdp v1 §4.2.
+     *  2. Decide which services (if any) we owe a reply for. Unknown / unregistered
+     *     STs are silently dropped per the SSDP convention (an M-SEARCH ST that
+     *     does not apply is "not for us").
+     *  3. Only then call authenticationProvider, so wasted authn work and any
+     *     attacker-controlled string never reaches the provider for STs we will
+     *     not answer. Wrap the provider in try/catch and fail closed on throw.
+     *  4. Delay the reply by a random interval in [0, MX] seconds per UPnP DA
+     *     to mitigate the multicast-amplification reply storm.
+     *
      * @param payload
      * @param local
      * @param remote
@@ -248,31 +271,75 @@ export class Advertiser extends EventEmitter {
 
         if (man !== '"ssdp:discover"' || !target) return false;
 
-        if (!await this.authenticationProvider(remote.address)) return false;
+        // Build the reply set the M-SEARCH actually requires before consulting
+        // authn. Returns null if we do not advertise anything matching `target`.
+        const replyServices = this.build_reply_set(target);
+        if (!replyServices) return false;
 
-        const service = this._services.get(target);
-
-        if (target === 'ssdp:all') {
-            this.emit('search', target, payload, remote, local);
-
-            return this.reply(payload, this._services);
-        } else if (target === 'upnp:rootdevice') {
-            this.emit('search', target, payload, remote, local);
-
-            return this.reply(payload, new Map([[target, new Headers()]]));
-        } else if (target === `uuid:${this.uuid}`) {
-            this.emit('search', target, payload, remote, local);
-
-            return this.reply(payload, new Map([[target, new Headers()]]));
-        } else if (service) {
-            this.emit('search', target, payload, remote, local);
-
-            return this.reply(payload, new Map([[target, service]]));
-        } else {
-            this.emit('error', new Error(`Unknown target or service: ${target} || ${service}`));
+        let allowed = false;
+        try {
+            allowed = await this.authenticationProvider(remote.address);
+        } catch (error: any) {
+            // Authentication provider failures fail closed. The error is
+            // surfaced for observability but we never proceed to reply.
+            this.emit('error', new Error(
+                `authenticationProvider threw for ${remote.address}: ${error?.message ?? error}`));
+            return false;
         }
+        if (!allowed) return false;
 
-        return false;
+        this.emit('search', target, payload, remote, local);
+
+        // UPnP DA: SHOULD wait a random interval in [0, MX] seconds before
+        // responding to a multicast M-SEARCH. Parse MX defensively; clamp
+        // out-of-range / non-numeric to the lower spec bound (1s) to bound
+        // worst-case delay while still spreading the reply storm.
+        const mxStr = payload.getHeader('MX');
+        const mxParsed = mxStr !== undefined ? parseInt(mxStr, 10) : NaN;
+        const mx = Number.isFinite(mxParsed) && mxParsed >= 1 && mxParsed <= 5 ? mxParsed : 1;
+        const delayMs = Math.floor(Math.random() * mx * 1000);
+
+        setTimeout(() => {
+            if (this.isDestroyed) return;
+            this.reply(payload, replyServices);
+        }, delayMs);
+
+        return true;
+    }
+
+    /**
+     * Returns the (service → headers) map we should reply with for the given
+     * M-SEARCH ST, or `null` if this advertiser does not answer to `target`.
+     *
+     * Per UPnP DA, an `ssdp:all` query MUST be answered with one response per
+     * root device (`upnp:rootdevice`), one per device UUID (`uuid:<UUID>`), and
+     * one per advertised service type. `upnp:rootdevice` and `uuid:<UUID>` are
+     * also valid standalone STs that resolve to a single reply each.
+     *
+     * @param target
+     * @private
+     */
+    private build_reply_set (target: string): Map<string, Headers> | null {
+        if (target === 'ssdp:all') {
+            const set = new Map<string, Headers>();
+            set.set('upnp:rootdevice', new Headers());
+            set.set(`uuid:${this.uuid}`, new Headers());
+            for (const [service, headers] of this._services.entries()) {
+                set.set(service, headers);
+            }
+            return set;
+        }
+        if (target === 'upnp:rootdevice') {
+            return new Map([[target, new Headers()]]);
+        }
+        if (target === `uuid:${this.uuid}`) {
+            return new Map([[target, new Headers()]]);
+        }
+        const service = this._services.get(target);
+        if (service) {
+            return new Map([[target, service]]);
+        }
+        return null;
     }
 
     /**
@@ -304,6 +371,8 @@ export class Advertiser extends EventEmitter {
      * @private
      */
     private notify_root_devices (): void {
+        if (this.silentMode) return;
+
         this.socket.notify('upnp:rootdevice', { USN: `uuid:${this.uuid}::upnp:rootdevice` })
             .then(errors =>
                 errors.forEach(error =>
@@ -321,6 +390,8 @@ export class Advertiser extends EventEmitter {
      * @private
      */
     private notify (services: Map<string, Headers>): void {
+        if (this.silentMode) return;
+
         for (const [service, headers] of services.entries()) {
             headers.set('USN', `uuid:${this.uuid}::${service}`);
 
@@ -336,6 +407,8 @@ export class Advertiser extends EventEmitter {
      * @private
      */
     private async send_goodbyes (): Promise<void> {
+        if (this.silentMode) return;
+
         const errors = await this.socket.bye(`uuid:${this.uuid}`, { USN: `uuid:${this.uuid}` });
 
         errors.push(...await this.socket.bye('upnp:rootdevice', { USN: `uuid:${this.uuid}::upnp:rootdevice` }));
@@ -354,6 +427,8 @@ export class Advertiser extends EventEmitter {
      * @private
      */
     private async send_goodbye (service: string): Promise<Error[]> {
+        if (this.silentMode) return [];
+
         return this.socket.bye(service, { USN: `uuid:${this.uuid}::${service}` });
     }
 }
@@ -366,8 +441,15 @@ export namespace Advertiser {
          */
         interval: number;
         /**
-         * The UUID for the instance of this server
-         * @default new v7 UUID
+         * The UUID for the instance of this server.
+         *
+         * The default is a fresh RFC 9562 v4 (random) UUID. UPnP DA expects
+         * device UUIDs to be stable across reboots; if you want that, generate
+         * one once at install time, persist it, and pass it here every run.
+         * Avoid v1 (leaks MAC) and v7 (leaks creation wall-clock timestamp via
+         * every USN multicast).
+         *
+         * @default new v4 UUID
          */
         uuid: string;
         /**
@@ -375,13 +457,33 @@ export namespace Advertiser {
          */
         services: Record<string, HeadersInit>;
         /**
-         * The authentication provider that is used to validate whether we should respond
-         * to search requests sent from the specified IP address
+         * Gates unicast responses to incoming M-SEARCH requests by remote IP.
+         * Returns true to allow the response, false to silently drop.
          *
-         * Note: return `true` if we should respond and `false` if we should not respond
+         * This callback ONLY governs unicast replies. Outbound multicast
+         * NOTIFY / ssdp:alive / ssdp:byebye are sent to the multicast group
+         * without consulting this callback. If you need the advertiser to stay
+         * silent on the wire and only respond to direct queries, also set
+         * `silentMode: true`.
+         *
+         * If the callback throws, the request fails closed.
+         *
          * @param ipAddress
          * @default () => true
          */
         authenticationProvider: (ipAddress: string) => Promise<boolean> | boolean;
+        /**
+         * When true, the advertiser does not periodically multicast NOTIFY
+         * ssdp:alive, does not multicast ssdp:byebye on destroy, and does not
+         * react to its own interval timer. It still answers unicast M-SEARCH
+         * requests that pass {@link authenticationProvider}.
+         *
+         * Use this when SSDP discoverability should be initiated by the
+         * requester (pull) rather than announced (push), or when the
+         * advertiser should appear only to authorized querents.
+         *
+         * @default false
+         */
+        silentMode: boolean;
     }
 }
