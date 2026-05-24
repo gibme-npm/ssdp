@@ -215,15 +215,19 @@ describe('SSDP Unit Tests', async () => {
     });
 
     describe('Dispatcher hardening', () => {
+        // Tests in this block share the multicast group with the suite-level
+        // advertiser, which periodically emits ssdp:alive NOTIFY frames. Each
+        // test filters its assertion by a unique per-test marker placed in a
+        // header of the probe packet, so unrelated traffic on the group cannot
+        // contaminate the result. A positive-control packet is sent alongside
+        // the negative-control packet and the assertion is skipped (not failed)
+        // when multicast loopback drops the control, matching the macOS
+        // tolerance pattern elsewhere in this suite.
+
         let dispatcher: SSDP;
-        let events: { type: string }[];
 
         before(async () => {
             dispatcher = await SSDP.create({ loopback: true });
-            events = [];
-            dispatcher.on('search', () => events.push({ type: 'search' }));
-            dispatcher.on('notification', () => events.push({ type: 'notification' }));
-            dispatcher.on('reply', () => events.push({ type: 'reply' }));
         });
 
         after(async () => {
@@ -231,33 +235,67 @@ describe('SSDP Unit Tests', async () => {
             await new Promise(resolve => setTimeout(resolve, 100));
         });
 
-        it('M-SEARCH with a non-* request-URI is silently dropped', async () => {
+        it('M-SEARCH with a non-* request-URI is silently dropped', async (t) => {
+            const badMarker = 'test-non-star-' + Math.random().toString(36).slice(2);
+            const goodMarker = 'test-search-ctrl-' + Math.random().toString(36).slice(2);
+            const seen: string[] = [];
+            const onSearch = (p: SSDP.Search) => {
+                const st = p.getHeader('ST') ?? '';
+                if (st === badMarker || st === goodMarker) seen.push(st);
+            };
+            dispatcher.on('search', onSearch);
+
             const sock = dgram.createSocket('udp4');
             await new Promise<void>(resolve => sock.bind(0, () => resolve()));
-            const msg = Buffer.from('M-SEARCH /not-allowed HTTP/1.1\r\n' +
+            const badMsg = Buffer.from('M-SEARCH /not-allowed HTTP/1.1\r\n' +
                 'HOST: 239.255.255.250:1900\r\n' +
-                'MAN: "ssdp:discover"\r\nMX: 1\r\nST: ssdp:all\r\n\r\n');
-            sock.send(msg, 1900, '239.255.255.250');
-            events.length = 0;
+                `MAN: "ssdp:discover"\r\nMX: 1\r\nST: ${badMarker}\r\n\r\n`);
+            const goodMsg = Buffer.from('M-SEARCH * HTTP/1.1\r\n' +
+                'HOST: 239.255.255.250:1900\r\n' +
+                `MAN: "ssdp:discover"\r\nMX: 1\r\nST: ${goodMarker}\r\n\r\n`);
+            sock.send(badMsg, 1900, '239.255.255.250');
+            sock.send(goodMsg, 1900, '239.255.255.250');
             await new Promise(resolve => setTimeout(resolve, 500));
             sock.close();
-            const searchEvents = events.filter(e => e.type === 'search');
-            assert.equal(searchEvents.length, 0,
+            dispatcher.off('search', onSearch);
+
+            if (!seen.includes(goodMarker)) {
+                t.skip('multicast loopback did not deliver the M-SEARCH control packet');
+                return;
+            }
+            assert.equal(seen.includes(badMarker), false,
                 'non-* request-URI must not be dispatched as a search event');
         });
 
-        it('NOTIFY-prefix substring start-line is silently dropped', async () => {
+        it('NOTIFY-prefix substring start-line is silently dropped', async (t) => {
+            const badMarker = 'test-notify-prefix-' + Math.random().toString(36).slice(2);
+            const goodMarker = 'test-notify-ctrl-' + Math.random().toString(36).slice(2);
+            const seen: string[] = [];
+            const onNotification = (p: SSDP.Notification) => {
+                const nt = p.getHeader('NT') ?? '';
+                if (nt === badMarker || nt === goodMarker) seen.push(nt);
+            };
+            dispatcher.on('notification', onNotification);
+
             const sock = dgram.createSocket('udp4');
             await new Promise<void>(resolve => sock.bind(0, () => resolve()));
-            const msg = Buffer.from('NOTIFY-EXT * HTTP/1.1\r\n' +
+            const badMsg = Buffer.from('NOTIFY-EXT * HTTP/1.1\r\n' +
                 'HOST: 239.255.255.250:1900\r\n' +
-                'NT: test\r\nNTS: ssdp:alive\r\n\r\n');
-            sock.send(msg, 1900, '239.255.255.250');
-            events.length = 0;
+                `NT: ${badMarker}\r\nNTS: ssdp:alive\r\n\r\n`);
+            const goodMsg = Buffer.from('NOTIFY * HTTP/1.1\r\n' +
+                'HOST: 239.255.255.250:1900\r\n' +
+                `NT: ${goodMarker}\r\nNTS: ssdp:alive\r\n\r\n`);
+            sock.send(badMsg, 1900, '239.255.255.250');
+            sock.send(goodMsg, 1900, '239.255.255.250');
             await new Promise(resolve => setTimeout(resolve, 500));
             sock.close();
-            const notifEvents = events.filter(e => e.type === 'notification');
-            assert.equal(notifEvents.length, 0,
+            dispatcher.off('notification', onNotification);
+
+            if (!seen.includes(goodMarker)) {
+                t.skip('multicast loopback did not deliver the NOTIFY control packet');
+                return;
+            }
+            assert.equal(seen.includes(badMarker), false,
                 'NOTIFY-prefix substring must not dispatch as a notification');
         });
     });
